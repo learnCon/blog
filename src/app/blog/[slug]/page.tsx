@@ -5,6 +5,7 @@ import Link from "next/link";
 import ReadingProgress from "@/components/ReadingProgress";
 import TableOfContents from "@/components/TableOfContents";
 import { JsonLdArticle, JsonLdBreadcrumb } from "@/components/JsonLd";
+import Giscus from "@/components/Giscus";
 import type { Metadata } from "next";
 
 const baseUrl = "https://blog.liangzaide.cn";
@@ -178,6 +179,9 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
             返回文章列表
           </Link>
         </div>
+
+        {/* Comments */}
+        <Giscus slug={post.slug} />
       </article>
     </div>
   );
