@@ -191,9 +191,7 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
         </div>
 
         {/* Comments */}
-        <div id="comments">
-          <Giscus slug={post.slug} />
-        </div>
+        <Giscus slug={post.slug} />
       </article>
     </div>
   );
