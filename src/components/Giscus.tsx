@@ -17,35 +17,44 @@ export default function Giscus({ slug }: CommentsProps) {
     setLoading(true);
     setError("");
 
-    // 动态加载 Waline CSS
+    // 使用本地 CSS（不经过境外 CDN）
     if (!document.querySelector('link[href*="waline"]')) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "https://unpkg.com/@waline/client@v3/dist/waline.css";
+      link.href = "/waline/waline.css";
       document.head.appendChild(link);
     }
 
-    // 动态加载 Waline JS
+    // 使用本地 JS
     const script = document.createElement("script");
-    script.src = "https://unpkg.com/@waline/client@v3/dist/waline.js";
+    script.src = "/waline/waline.js";
     script.async = true;
 
     script.onload = () => {
       // @ts-ignore
       if ((window as any).Waline) {
-        // @ts-ignore
-        (window as any).Waline({
-          el: ref.current,
-          serverURL: "https://waline-test-goer.vercel.app", // Waline 官方测试服务，可替换为自有后端
-          path: `/blog/${slug}`,
-          lang: "zh-CN",
-          locale: "zh-CN",
-          reaction: true,
-          meta: ["nick", "mail", "link"],
-          requiredMeta: ["nick", "mail"],
-          dark: "auto",
-        });
-        setLoading(false);
+        try {
+          // @ts-ignore
+          (window as any).Waline({
+            el: ref.current,
+            // 使用 Waline 官方体验后端（国内可访问 vercel.app）
+            // 如需自有后端，请参考：https://waline.js.org/guide/get-started.html
+            serverURL: "https://waline-test-goer.vercel.app",
+            path: `/blog/${slug}`,
+            lang: "zh-CN",
+            locale: "zh-CN",
+            reaction: true,
+            meta: ["nick", "mail", "link"],
+            requiredMeta: ["nick", "mail"],
+            dark: "auto",
+            comment: true,
+            pageview: true,
+          });
+          setLoading(false);
+        } catch (e: any) {
+          setError("评论初始化失败：" + e.message);
+          setLoading(false);
+        }
       }
     };
 
@@ -55,9 +64,14 @@ export default function Giscus({ slug }: CommentsProps) {
     };
 
     document.body.appendChild(script);
+
+    return () => {
+      // 清理：防止组件卸载后脚本还在
+      try { document.body.removeChild(script); } catch {}
+    };
   }, [slug]);
 
-  // 处理 URL hash 定位
+  // 处理 URL hash 定位（如 /blog/xxx#comments）
   useEffect(() => {
     if (typeof window === "undefined") return;
     const hash = window.location.hash.slice(1);
@@ -67,7 +81,7 @@ export default function Giscus({ slug }: CommentsProps) {
         if (el) {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
         }
-      }, 1000);
+      }, 1200);
       return () => clearTimeout(timer);
     }
   }, []);
@@ -81,6 +95,10 @@ export default function Giscus({ slug }: CommentsProps) {
         评论
       </h2>
 
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        评论需要填写昵称和邮箱。评论内容将公开显示。
+      </p>
+
       {loading && (
         <p className="text-sm text-gray-400 dark:text-gray-500">
           评论区加载中...
@@ -89,8 +107,11 @@ export default function Giscus({ slug }: CommentsProps) {
 
       {error && (
         <div className="text-sm text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 p-4 rounded-lg">
-          <p className="font-medium mb-2">评论区加载失败</p>
+          <p className="font-medium mb-2">评论区暂时无法加载</p>
           <p>{error}</p>
+          <p className="mt-2 text-xs text-gray-400">
+            提示：如因网络问题无法加载评论，请尝试开启代理后刷新页面。
+          </p>
         </div>
       )}
 
