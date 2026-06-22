@@ -27,7 +27,7 @@ export default function Home() {
             浏览文章
           </Link>
           <a
-            href="https://github.com"
+            href="https://github.com/learnCon"
             target="_blank"
             rel="noopener noreferrer"
             className="px-6 py-3 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-medium hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
