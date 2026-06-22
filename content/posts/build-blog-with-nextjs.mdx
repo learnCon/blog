@@ -1,0 +1,96 @@
+---
+title: "使用 Next.js + MDX 搭建技术博客"
+description: "详细介绍如何使用 Next.js 14 和 MDX 从零搭建一个功能完整的技术博客，包括代码高亮、暗黑模式等特性。"
+date: "2026-06-17"
+tags: ["Next.js", "MDX", "博客", "前端"]
+author: "开发者"
+---
+
+# 使用 Next.js + MDX 搭建技术博客
+
+## 为什么选择 Next.js + MDX？
+
+Next.js 14 是目前最流行的 React 框架之一，结合 MDX（Markdown + JSX），我们可以：
+
+- 用 Markdown 写文章，简单高效
+- 在文章中嵌入 React 组件
+- 享受 SSR/SSG 带来的性能优势
+- 轻松部署到 Vercel、Cloudflare Pages 等平台
+
+## 项目结构
+
+```bash
+src/
+├── app/
+│   ├── layout.tsx       # 根布局
+│   ├── page.tsx         # 首页
+│   ├── globals.css      # 全局样式
+│   └── blog/
+│       ├── page.tsx     # 博客列表页
+│       └── [slug]/
+│           └── page.tsx # 文章详情页
+├── components/
+│   ├── Header.tsx       # 导航栏（含暗黑切换）
+│   ├── Footer.tsx       # 页脚
+│   ├── PostCard.tsx     # 文章卡片
+│   ├── ReadingProgress.tsx  # 阅读进度条
+│   └── TableOfContents.tsx  # 目录导航
+├── lib/
+│   └── posts.ts         # 文章解析工具
+└── types/
+    └── post.ts          # 类型定义
+```
+
+## 核心功能实现
+
+### 1. MDX 文章解析
+
+使用 `gray-matter` 解析 Markdown 文件的前置信息：
+
+```typescript
+import matter from "gray-matter";
+
+const { data, content } = matter(fileContents);
+// data 包含 title, date, tags 等元信息
+// content 是正文内容
+```
+
+### 2. 代码高亮
+
+使用 `rehype-pretty-code` 和 `Shiki` 实现：
+
+```typescript
+const { content } = await compileMDX({
+  source: post.content,
+  options: {
+    mdxOptions: {
+      rehypePlugins: [[rehypePrettyCode, { theme: "github-dark" }]]
+    }
+  }
+});
+```
+
+### 3. 暗黑模式
+
+通过 Tailwind CSS 的 `dark:` 前缀和 localStorage 实现：
+
+```typescript
+const toggleDarkMode = () => {
+  const newDarkMode = !darkMode;
+  document.documentElement.classList.toggle("dark", newDarkMode);
+  localStorage.setItem("theme", newDarkMode ? "dark" : "light");
+};
+```
+
+## 总结
+
+这个博客项目展示了如何结合 Next.js 14 和 MDX 构建一个现代技术博客。通过合理利用生态工具，我们可以用很少的代码实现丰富的功能。
+
+下一步可以扩展的功能：
+- 全文搜索
+- RSS 订阅
+- 评论系统
+- SEO 优化
+- 数据分析
+
+欢迎关注后续更新！

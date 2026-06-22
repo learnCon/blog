@@ -1,0 +1,1017 @@
+---
+title: "CI/CD 自动化部署完全指南（三）：监控告警、故障排查与最佳实践"
+description: "深入讲解 Prometheus + Grafana 监控配置、常见故障排查方法，以及生产环境 CI/CD 最佳实践，帮你打造稳定可靠的自动化部署系统。"
+date: "2026-06-20"
+tags: ["CI/CD", "DevOps", "Docker", "GitHub Actions", "监控告警", "故障排查", "最佳实践"]
+author: "DevOps Automator"
+---
+
+# CI/CD 自动化部署完全指南（三）：监控告警、故障排查与最佳实践
+
+> 打造稳定可靠的自动化部署系统
+
+在前两篇文章中，我们介绍了 CI/CD 方案概述、架构设计、快速开始和配置详解。本篇将深入讲解**监控告警**、**故障排查**和**最佳实践**，帮你打造一个稳定可靠的自动化部署系统。
+
+---
+
+## 监控告警系统
+
+### 为什么需要监控告警？
+
+自动化部署不是"部署完就完事了"。你需要：
+
+- ✅ 知道应用运行是否正常
+- ✅ 在用户投诉之前发现问题
+- ✅ 了解系统资源使用情况
+- ✅ 追踪业务指标变化
+
+**一个完整的监控体系包含**：
+
+```
+┌──────────────────────────────────────┐
+│          监控告警体系              │
+├──────────────────────────────────────┤
+│  指标采集 → Prometheus           │
+│  ↓                               │
+│  指标存储 → Prometheus TSDB      │
+│  ↓                               │
+│  可视化   → Grafana             │
+│  ↓                               │
+│  告警判断 → Prometheus Alerting │
+│  ↓                               │
+│  告警发送 → AlertManager        │
+│  ↓                               │
+│  通知接收 → Slack/邮件/钉钉    │
+└──────────────────────────────────────┘
+```
+
+---
+
+### Prometheus 配置详解
+
+Prometheus 是监控系统的核心，负责**指标采集和存储**。
+
+#### 主配置文件 (`prometheus.yml`)
+
+```yaml
+global:
+  scrape_interval: 15s          # 全局采集间隔
+  evaluation_interval: 15s      # 告警规则评估间隔
+  external_labels:
+    monitor: 'your-app-monitor'
+
+# 告警管理器配置
+alerting:
+  alertmanagers:
+    - scheme: http
+      static_configs:
+        - targets:
+          - alertmanager:9093
+
+# 告警规则文件
+rule_files:
+  - "alert_rules.yml"
+
+# 指标采集配置
+scrape_configs:
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 应用监控（最重要！）
+  - job_name: 'your-app'
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+        - 'app-blue:3000'    # 蓝环境
+        - 'app-green:3000'    # 绿环境
+    scrape_interval: 5s         # 更频繁的采集
+    scrape_timeout: 4s
+
+  # Node Exporter（服务器指标）
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Nginx 监控
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx-exporter:9113']
+
+  # Docker 容器监控
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # 业务指标（自定义）
+  - job_name: 'business-metrics'
+    metrics_path: /metrics/business
+    static_configs:
+      - targets: ['app-blue:3000']
+    scrape_interval: 30s
+```
+
+**关键配置说明**：
+
+| 配置项 | 说明 | 推荐值 |
+|--------|------|--------|
+| `scrape_interval` | 采集间隔 | 应用：5-15s；业务：30-60s |
+| `scrape_timeout` | 采集超时 | 比间隔小 1-2s |
+| `metrics_path` | 指标端点路径 | 默认 `/metrics` |
+| `static_configs.targets` | 采集目标 | `容器名:端口` |
+
+---
+
+### 应用指标暴露
+
+要让 Prometheus 采集到应用指标，你需要在应用中暴露 `/metrics` 端点。
+
+#### Express.js 示例
+
+```javascript
+const express = require('express');
+const promClient = require('prom-client');
+
+const app = express();
+
+// 创建自定义指标
+const httpRequestDuration = new promClient.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'status_code'],
+  buckets: [0.1, 0.3, 0.5, 0.7, 1, 3, 5, 7, 10]
+});
+
+const httpRequestsTotal = new promClient.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status']
+});
+
+// 中间件：记录请求耗时
+app.use((req, res, next) => {
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    const duration = (Date.now() - start) / 1000;
+    const route = req.route?.path || req.path;
+    
+    // 记录请求耗时
+    httpRequestDuration
+      .labels(req.method, route, res.statusCode.toString())
+      .observe(duration);
+    
+    // 记录请求总数
+    httpRequestsTotal
+      .labels(req.method, route, res.statusCode.toString())
+      .inc();
+  });
+  
+  next();
+});
+
+// 暴露指标端点
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', promClient.register.contentType);
+    res.end(await promClient.register.metrics());
+  } catch (error) {
+    res.status(500).end(error);
+  }
+});
+
+// 健康检查端点
+app.get('/health', (req, res) => {
+  // 检查数据库连接等
+  checkHealth()
+    .then(() => res.status(200).send('OK'))
+    .catch(() => res.status(503).send('Unhealthy'));
+});
+
+app.listen(3000, () => {
+  console.log('Server running on port 3000');
+});
+```
+
+#### NestJS 示例
+
+```typescript
+// main.ts
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { PrometheusMiddleware } from './middleware/prometheus.middleware';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  
+  // 注册 Prometheus 中间件
+  app.use(new PrometheusMiddleware().use);
+  
+  // 暴露 metrics 端点
+  app.getHttpAdapter().get('/metrics', async (req, res) => {
+    res.setHeader('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  });
+  
+  // 健康检查端点
+  app.getHttpAdapter().get('/health', async (req, res) => {
+    // 检查数据库连接等
+    const isHealthy = await checkHealth();
+    res.status(isHealthy ? 200 : 503).send(isHealthy ? 'OK' : 'Unhealthy');
+  });
+  
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+---
+
+### 告警规则配置
+
+告警规则定义在 `alert_rules.yml` 中。
+
+#### 应用层告警
+
+```yaml
+groups:
+  - name: application_alerts
+    rules:
+      # 应用错误率告警
+      - alert: HighErrorRate
+        expr: |
+          rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "应用错误率过高"
+          description: "服务 {{ $labels.instance }} 错误率 {{ $value | printf \"%.2f\" }} req/s，持续 5 分钟"
+
+      # 应用响应时间告警
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "应用响应时间过长"
+          description: "服务 {{ $labels.instance }} 95分位响应时间 {{ $value | printf \"%.2f\" }} 秒"
+
+      # 应用实例下线告警
+      - alert: AppInstanceDown
+        expr: |
+          up{job="your-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "应用实例下线"
+          description: "服务 {{ $labels.instance }} 已下线超过 1 分钟"
+
+      # 容器内存使用过高
+      - alert: HighMemoryUsage
+        expr: |
+          container_memory_usage_bytes{container=~"your-app.*"} / container_spec_memory_limit_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "容器内存使用率过高"
+          description: "容器 {{ $labels.container }} 内存使用率 {{ $value | printf \"%.2f\" }}%"
+```
+
+#### 基础设施层告警
+
+```yaml
+  - name: infrastructure_alerts
+    rules:
+      # 服务器 CPU 使用率过高
+      - alert: HighNodeCpuUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "服务器 CPU 使用率过高"
+          description: "服务器 {{ $labels.instance }} CPU 使用率 {{ $value | printf \"%.2f\" }}%"
+
+      # 服务器内存使用率过高
+      - alert: HighNodeMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "服务器内存使用率过高"
+          description: "服务器 {{ $labels.instance }} 内存使用率 {{ $value | printf \"%.2f\" }}%"
+
+      # 磁盘使用率过高
+      - alert: HighDiskUsage
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype=~"ext4|xfs"} / node_filesystem_size_bytes)) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "磁盘使用率过高"
+          description: "服务器 {{ $labels.instance }} 磁盘 {{ $labels.mountpoint }} 使用率 {{ $value | printf \"%.2f\" }}%"
+
+      # 服务器下线告警
+      - alert: NodeDown
+        expr: |
+          up{job="node"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "服务器下线"
+          description: "服务器 {{ $labels.instance }} 已下线超过 1 分钟"
+```
+
+#### 业务层告警（自定义）
+
+```yaml
+  - name: business_alerts
+    rules:
+      # 订单处理延迟
+      - alert: OrderProcessingDelay
+        expr: |
+          increase(orders_pending_total[10m]) > 100
+        for: 10m
+        labels:
+          severity: critical
+          team: business
+        annotations:
+          summary: "订单处理延迟"
+          description: "待处理订单数 {{ $value }} 个，持续 10 分钟"
+
+      # 支付成功率下降
+      - alert: LowPaymentSuccessRate
+        expr: |
+          rate(payments_total{status="success"}[10m]) / rate(payments_total[10m]) < 0.95
+        for: 5m
+        labels:
+          severity: critical
+          team: business
+        annotations:
+          summary: "支付成功率下降"
+          description: "支付成功率 {{ $value | printf \"%.2f\" }}%，低于 95%"
+
+      # 用户活跃度下降
+      - alert: LowUserActivity
+        expr: |
+          rate(user_activity_total[1h]) < 10
+        for: 30m
+        labels:
+          severity: warning
+          team: product
+        annotations:
+          summary: "用户活跃度下降"
+          description: "每小时用户活跃数 {{ $value | printf \"%.0f\" }}，低于正常值"
+```
+
+---
+
+### Grafana 可视化配置
+
+Grafana 负责**指标可视化和仪表盘展示**。
+
+#### 访问 Grafana
+
+部署完成后，访问：`http://your-domain.com:3002`
+
+**默认登录凭证**（请立即修改）：
+- 用户名：`admin`
+- 密码：`admin`
+
+#### 添加 Prometheus 数据源
+
+1. 登录 Grafana
+2. 点击左侧边栏 `Configuration → Data Sources`
+3. 点击 `Add data source`
+4. 选择 `Prometheus`
+5. 配置：
+   - **URL**: `http://prometheus:9090`
+   - **Access**: `Server (default)`
+6. 点击 `Save & Test`
+
+#### 导入预建仪表盘
+
+Grafana 社区有大量的预建仪表盘，可以直接导入使用。
+
+**推荐仪表盘**：
+
+| 仪表盘名称 | ID | 说明 |
+|-------------|----|------|
+| Node Exporter Full | `1860` | 服务器资源监控 |
+| Docker Container Overview | `11558` | Docker 容器监控 |
+| Nginx Stats | `12708` | Nginx 监控 |
+| React App | `14135` | React 应用监控 |
+
+**导入方法**：
+
+1. 点击左侧边栏 `Dashboards`
+2. 点击 `Import`
+3. 输入仪表盘 ID
+4. 选择数据源为 `Prometheus`
+5. 点击 `Import`
+
+#### 创建自定义仪表盘
+
+除了导入预建仪表盘，你还可以创建自定义仪表盘来展示业务指标。
+
+**示例：创建 API 请求速率图表**
+
+1. 点击 `Add panel → Add new panel`
+2. 输入 PromQL 查询：
+
+```promql
+# API 请求速率（按路由分组）
+sum(rate(http_requests_total[5m])) by (route)
+
+# API 错误率
+sum(rate(http_requests_total{status=~"5.."}[5m])) by (route) / sum(rate(http_requests_total[5m])) by (route)
+
+# API 95 分位响应时间
+histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+```
+
+3. 配置图表样式：
+   - **Visualization**: `Time series` 或 `Bar chart`
+   - **Legend**: 显示 `Max`, `Mean`, `Current`
+   - **Thresholds**: 添加阈值线（如 500ms）
+
+---
+
+### AlertManager 告警通知配置
+
+AlertManager 负责**接收 Prometheus 的告警，并发送到通知渠道**。
+
+#### 配置 Slack 通知
+
+创建 `alertmanager.yml`：
+
+```yaml
+global:
+  slack_api_url: 'https://hooks.slack.com/services/xxx/xxx/xxx'
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'slack-notifications'
+
+receivers:
+  - name: 'slack-notifications'
+    slack_configs:
+      - channel: '#alerts'
+        title: '{{ if eq .Status "firing" }}🔥{{ else }}✅{{ end }} {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          *Time:* {{ .StartsAt }}
+          {{ end }}
+```
+
+#### 配置邮件通知
+
+```yaml
+global:
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@example.com'
+  smtp_auth_username: 'alerts@example.com'
+  smtp_auth_password: 'your-app-password'
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'email-notifications'
+
+receivers:
+  - name: 'email-notifications'
+    email_configs:
+      - to: 'team@example.com'
+        send_resolved: true
+```
+
+#### 配置钉钉通知
+
+```yaml
+receivers:
+  - name: 'dingtalk-notifications'
+    webhook_configs:
+      - url: 'https://oapi.dingtalk.com/robot/send?access_token=xxx'
+        send_resolved: true
+```
+
+---
+
+## 故障排查指南
+
+即使有了自动化部署和监控告警，偶尔还是会遇到问题。本节介绍**常见故障的排查方法**。
+
+---
+
+### 1. GitHub Actions 部署失败
+
+**症状**：流水线中 `deploy-prod` job 失败
+
+**排查步骤**：
+
+```bash
+# 1. 查看 GitHub Actions 日志
+# - 进入仓库 → Actions → 选择失败的 workflow run
+# - 展开失败的 job，查看错误日志
+
+# 常见问题及解决方案：
+
+# 问题 A: SSH 连接失败
+# 错误信息：Permission denied (publickey)
+# 解决方案：
+# - 检查 secrets 中的 SSH key 是否正确
+# - 确保私钥格式正确（包含 BEGIN/END 行）
+# - 确保公钥已添加到服务器的 ~/.ssh/authorized_keys
+
+# 问题 B: 镜像拉取失败
+# 错误信息：pull access denied
+# 解决方案：
+# - 检查 DOCKER_PASSWORD 是否过期
+# - 检查 DOCKER_USERNAME 是否有拉取权限
+# - 手动登录镜像仓库测试：docker login ...
+
+# 问题 C: 健康检查失败
+# 错误信息：curl: (7) Failed to connect to localhost port 3001
+# 解决方案：
+# - 检查应用启动日志：docker logs your-app-green
+# - 检查端口是否正确暴露
+# - 检查应用是否成功连接到数据库等其他服务
+```
+
+---
+
+### 2. 蓝绿部署失败
+
+**症状**：流量切换后，应用无法访问
+
+**排查步骤**：
+
+```bash
+# 1. 检查容器状态
+docker-compose ps
+
+# 预期输出：
+# NAME             COMMAND                  SERVICE    STATUS      PORTS
+# your-app-blue    "docker-entrypoint.s…"   app-blue   running     0.0.0.0:3000->3000/tcp
+# your-app-green   "docker-entrypoint.s…"   app-green  running     0.0.0.0:3001->3000/tcp
+# your-app-nginx   "/docker-entrypoint.…"   nginx      running     0.0.0.0:80->80/tcp
+
+# 2. 查看应用日志
+docker-compose logs app-green
+
+# 常见问题：
+# - 端口冲突：Error: listen EADDRINUSE:3000
+# - 数据库连接失败：connect ETIMEDOUT
+# - 环境变量缺失：Cannot read property 'xxx' of undefined
+
+# 3. 检查健康检查端点
+curl http://localhost:3001/health
+
+# 如果返回非 200 状态码，说明应用未就绪
+
+# 4. 检查 Nginx 配置
+docker-compose exec nginx nginx -t
+
+# 预期输出：
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
+
+# 5. 查看 Nginx 日志
+docker-compose logs nginx
+
+# 常见错误：
+# - 111: Connection refused（后端服务未启动）
+# - 504: Gateway Time-out（后端服务响应超时）
+
+# 6. 回滚到蓝环境
+./deploy/deploy.sh rollback
+```
+
+---
+
+### 3. 应用启动失败
+
+**症状**：容器不断重启（Restarting 状态）
+
+**排查步骤**：
+
+```bash
+# 1. 查看容器日志
+docker logs your-app-green
+
+# 常见错误及解决方案：
+
+# 错误 A: 端口冲突
+# Error: listen EADDRINUSE:3000
+# 解决方案：
+# - 检查是否有其他进程占用端口：netstat -tulpn | grep 3000
+# - 修改应用端口或停止占用端口的进程
+
+# 错误 B: 环境变量缺失
+# Error: Cannot read property 'DATABASE_URL' of undefined
+# 解决方案：
+# - 检查 .env 文件是否存在：cat .env
+# - 检查环境变量是否正确设置
+
+# 错误 C: 数据库连接失败
+# Error: connect ETIMEDOUT
+# 解决方案：
+# - 检查数据库是否运行：telnet database-host 3306
+# - 检查数据库凭证是否正确
+# - 检查防火墙规则是否允许访问
+
+# 2. 进入容器调试
+docker run -it --entrypoint sh your-app:tag
+
+# 在容器内手动启动应用，观察错误输出
+node dist/server.js
+```
+
+---
+
+### 4. 监控数据缺失
+
+**症状**：Grafana 仪表盘显示 "No data"
+
+**排查步骤**：
+
+```bash
+# 1. 检查 Prometheus 是否采集到指标
+curl http://localhost:9090/api/v1/targets
+
+# 预期输出（部分）：
+# {
+#   "status": "success",
+#   "data": {
+#     "activeTargets": [
+#       {
+#         "labels": { "job": "your-app" },
+#         "health": "up",  # 如果是 "down"，说明采集失败
+#         ...
+#       }
+#     ]
+#   }
+# }
+
+# 2. 检查应用 /metrics 端点
+curl http://localhost:3000/metrics
+
+# 预期输出（部分）：
+# # HELP http_request_duration_seconds Duration of HTTP requests in seconds
+# # TYPE http_request_duration_seconds histogram
+# http_request_duration_seconds_bucket{...} 123
+# ...
+
+# 如果输出为空或报错，说明应用未正确暴露指标
+
+# 3. 检查 Prometheus 配置
+docker-compose exec prometheus cat /etc/prometheus/prometheus.yml
+
+# 确保 scrape_configs 中包含你的应用
+
+# 4. 重启 Prometheus
+docker-compose restart prometheus
+```
+
+---
+
+### 日志查看技巧
+
+#### 应用日志
+
+```bash
+# 查看实时日志
+docker-compose logs -f app-blue
+
+# 查看最近 100 行
+docker-compose logs --tail=100 app-blue
+
+# 查看特定时间段的日志
+docker-compose logs --since="2026-06-20T00:00:00" --until="2026-06-20T12:00:00" app-blue
+```
+
+#### Nginx 日志
+
+```bash
+# 访问日志
+tail -f logs/nginx/access.log
+
+# 错误日志
+tail -f logs/nginx/error.log
+
+# 分析访问日志（统计 Top 10 IP）
+awk '{print $1}' logs/nginx/access.log | sort | uniq -c | sort -rn | head -10
+
+# 分析错误日志（统计错误类型）
+grep "error" logs/nginx/error.log | awk '{print $NF}' | sort | uniq -c | sort -rn
+```
+
+---
+
+## 最佳实践
+
+经过前几节的介绍，本节总结一些**生产环境 CI/CD 最佳实践**。
+
+---
+
+### 1. 分支管理策略
+
+推荐使用 **Git Flow** 或 **GitHub Flow** 分支模型。
+
+```
+main (生产)     ●───●───●───●
+                    ↑
+develop (开发)   ●───●───●───●
+                        ↑
+feature/A       ●───●
+                        ↑
+feature/B             ●───●
+```
+
+**规则**：
+
+- `main` 分支：生产环境，只接受来自 `develop` 的合并
+- `develop` 分支：开发环境，功能开发完成后合并到这里
+- `feature/*` 分支：功能开发，从 `develop` 分支创建
+- `hotfix/*` 分支：紧急修复，从 `main` 分支创建
+
+---
+
+### 2. 提交信息规范
+
+遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
+
+```bash
+feat: 添加用户登录功能          # 新功能
+fix: 修复订单提交错误            # Bug 修复
+docs: 更新 API 文档             # 文档更新
+style: 格式化代码                # 代码格式（不影响功能）
+refactor: 重构支付模块           # 重构（不是新功能也不是 Bug 修复）
+test: 添加用户服务单元测试        # 测试相关
+chore: 更新依赖版本              # 构建过程或辅助工具的变动
+```
+
+**为什么重要？**
+
+- ✅ 自动生成 CHANGELOG
+- ✅ 自动决定版本号（语义化版本）
+- ✅ 让团队成员更容易理解代码变更
+
+---
+
+### 3. 镜像标签策略
+
+| 标签类型 | 格式 | 说明 | 示例 |
+|---------|------|------|------|
+| 分支标签 | `branch-sha` | 每次提交自动生成 | `main-abc1234` |
+| 语义化版本 | `v1.2.3` | 正式发布版本 | `v1.2.3` |
+| 环境标签 | `stable` / `latest` | 环境当前版本 | `stable` |
+| 日期标签 | `YYYYMMDD` | 按日期标记 | `20240115` |
+
+**推荐**：
+
+- ✅ 生产环境使用具体的 commit SHA 或语义化版本标签
+- ❌ 避免使用 `latest`（不知道部署的是哪个版本）
+
+---
+
+### 4. Secrets 管理
+
+**不要将敏感信息提交到代码仓库！**
+
+✅ **推荐做法**：
+
+```bash
+# 使用环境变量
+export DATABASE_PASSWORD=secret
+
+# 使用 .env 文件（添加到 .gitignore）
+echo ".env" >> .gitignore
+echo ".env.*" >> .gitignore
+
+# 使用 GitHub Secrets（已加密存储）
+# 在 GitHub 仓库 Settings → Secrets and variables 中配置
+
+# 使用密钥管理服务（推荐用于生产）
+# - AWS Secrets Manager
+# - Azure Key Vault
+# - 阿里云 KMS
+# - 腾讯云 SSM
+```
+
+❌ **错误做法**：
+
+```javascript
+// ❌ 不要硬编码密码
+const dbPassword = "my-secret-password";
+
+// ❌ 不要提交 .env 文件到 Git
+git add .env
+git commit -m "add env file"  // 危险！
+```
+
+---
+
+### 5. 监控和告警阈值设置
+
+**关键指标告警设置建议**：
+
+```yaml
+# 应用层
+- 错误率 > 1% 持续 5 分钟 → warning
+- 错误率 > 5% 持续 3 分钟 → critical
+- P95 响应时间 > 500ms 持续 5 分钟 → warning
+- P95 响应时间 > 1s 持续 3 分钟 → critical
+
+# 系统层
+- CPU 使用率 > 80% 持续 10 分钟 → warning
+- CPU 使用率 > 90% 持续 5 分钟 → critical
+- 内存使用率 > 85% → warning
+- 内存使用率 > 95% → critical
+- 磁盘使用率 > 85% → warning
+- 磁盘使用率 > 95% → critical
+```
+
+**告警通知渠道选择**：
+
+| 告警级别 | 通知渠道 | 响应时间要求 |
+|---------|----------|----------------|
+| `critical` | 电话 + 短信 + Slack | 立即处理（< 15 分钟） |
+| `warning` | Slack + 邮件 | 尽快处理（< 2 小时） |
+| `info` | Slack | 有空处理（< 1 天） |
+
+---
+
+### 6. 性能优化
+
+#### Docker 镜像优化
+
+```dockerfile
+# ❌ 不推荐：单层构建，镜像体积大
+FROM node:18
+COPY . .
+RUN npm install
+RUN npm run build
+CMD ["node", "dist/server.js"]
+
+# ✅ 推荐：多阶段构建，减小镜像体积
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+RUN npm run build
+
+FROM node:18-alpine
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package*.json ./
+USER nodejs
+CMD ["node", "dist/server.js"]
+```
+
+**优化效果**：
+
+- 镜像体积：从 1.2GB → 150MB（减少 87%）
+- 构建时间：利用缓存，第二次构建快 60%
+- 安全性：非 root 用户运行，减小攻击面
+
+#### Docker Compose 优化
+
+```yaml
+# 使用 BuildKit 加速构建
+# 在构建前执行：
+export DOCKER_BUILDKIT=1
+
+# 使用镜像拉取策略
+services:
+  app:
+    image: your-app:latest
+    pull_policy: always  # 每次都拉取最新镜像
+
+# 配置日志轮转（防止日志占满磁盘）
+services:
+  app:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+---
+
+### 7. 备份和灾备
+
+**不要假设云服务商不会出问题！**
+
+✅ **推荐做法**：
+
+```bash
+# 定期备份数据库
+# 每天凌晨 2 点备份
+0 2 * * * docker exec your-db pg_dump -U user dbname | gzip > /backup/db-$(date +\%Y\%m\%d).sql.gz
+
+# 定期备份配置文件
+# 每天凌晨 3 点备份
+0 3 * * * tar -czf /backup/config-$(date +\%Y\%m\%d).tar.gz /opt/your-app/docker/
+
+# 将备份上传到云存储（如阿里云 OSS、AWS S3）
+# 每天凌晨 4 点上传
+0 4 * * * aws s3 cp /backup/ s3://your-backup-bucket/ --recursive
+
+# 定期清理旧备份（保留最近 30 天）
+0 5 * * * find /backup/ -type f -mtime +30 -delete
+```
+
+---
+
+## 总结
+
+通过本系列三篇文章，我们完整地介绍了如何从零构建一个**企业级 CI/CD 自动化部署方案**。
+
+### 系列回顾
+
+**第一部分**：方案概述 + 架构设计
+- 为什么需要 CI/CD 自动化
+- 方案概述（6 大核心特性）
+- 架构设计（整体架构 + 蓝绿部署详解）
+- 核心配置（GitHub Actions + Docker）
+
+**第二部分**：快速开始 + 配置详解 + 使用指南
+- 10 分钟完成环境搭建
+- GitHub Actions 和 Docker 配置详解
+- 日常开发流程和部署操作
+
+**第三部分**（本文）：监控告警 + 故障排查 + 最佳实践
+- Prometheus + Grafana 监控配置
+- 常见故障排查方法
+- 生产环境 CI/CD 最佳实践
+
+### 最终效果
+
+通过这套方案，你的团队将实现：
+
+✅ 部署频率提升 6-10 倍（从每周 1-2 次到每天多次）  
+✅ 部署出错率降低 90%+  
+✅ 回滚时间从 30 分钟降到 10 秒  
+✅ 零停机发布，用户无感知  
+✅ 全方位监控，在用户投诉之前发现问题  
+
+---
+
+## 下一步学习资源
+
+如果你对 CI/CD 和 DevOps 感兴趣，推荐以下学习资源：
+
+**官方文档**：
+- [GitHub Actions 文档](https://docs.github.com/en/actions)
+- [Docker 官方文档](https://docs.docker.com/)
+- [Prometheus 文档](https://prometheus.io/docs/)
+- [Nginx 文档](https://nginx.org/en/docs/)
+
+**推荐书籍**：
+- 《Site Reliability Engineering (SRE)》
+- 《The DevOps Handbook》
+- 《Continuous Delivery》
+
+**推荐实践**：
+- 尝试将本系列方案应用到你的项目中
+- 尝试集成更多工具（如 Kubernetes、Helm、ArgoCD）
+- 尝试实现渐进式交付（如金丝雀发布、A/B 测试）
+
+---
+
+**如果觉得这个系列对你有帮助，欢迎点赞、收藏、转发！** 🙏
+
+有任何问题或建议，欢迎在评论区留言讨论！
+
+**祝你的部署之旅顺利！** 🎉

@@ -1,0 +1,227 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}
+
+/* ========== Article Prose Styling ========== */
+
+@layer components {
+  .prose {
+    @apply text-gray-800 dark:text-gray-200 leading-relaxed;
+    font-size: 1.0625rem;
+    line-height: 1.85;
+    word-break: break-word;
+  }
+
+  /* Headings */
+  .prose h1 {
+    @apply text-2xl font-extrabold text-gray-900 dark:text-white mt-10 mb-5 pb-2 border-b border-gray-200 dark:border-gray-700;
+    scroll-margin-top: 5rem;
+  }
+  .prose h2 {
+    @apply text-xl font-bold text-gray-900 dark:text-white mt-8 mb-4;
+    scroll-margin-top: 5rem;
+  }
+  .prose h3 {
+    @apply text-lg font-semibold text-gray-800 dark:text-gray-100 mt-6 mb-3;
+    scroll-margin-top: 5rem;
+  }
+
+  /* Paragraphs */
+  .prose p {
+    @apply my-5 leading-[1.85];
+  }
+
+  /* Links */
+  .prose a {
+    @apply text-blue-600 dark:text-sky-400 font-medium underline decoration-blue-300 dark:decoration-sky-700 decoration-2 underline-offset-2 hover:decoration-blue-500 dark:hover:decoration-sky-400 transition-colors;
+  }
+
+  /* Bold & Strong */
+  .prose strong {
+    @apply font-bold text-gray-900 dark:text-white;
+  }
+
+  /* Blockquotes */
+  .prose blockquote {
+    @apply my-6 pl-5 border-l-4 border-blue-500 dark:border-sky-500 bg-blue-50 dark:bg-sky-950/30 py-3 pr-4 rounded-r-lg italic text-gray-700 dark:text-gray-300;
+  }
+
+  /* Unordered lists */
+  .prose ul {
+    @apply my-5 pl-6 list-disc space-y-2;
+  }
+
+  /* Ordered lists */
+  .prose ol {
+    @apply my-5 pl-6 list-decimal space-y-2;
+  }
+
+  .prose li {
+    @apply my-1;
+  }
+
+  .prose li > ul,
+  .prose li > ol {
+    @apply my-2;
+  }
+
+  /* Inline code */
+  .prose code {
+    @apply px-1.5 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-[0.9em] font-mono font-medium;
+  }
+  .prose pre {
+    @apply my-6 rounded-xl overflow-x-auto;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    padding: 0;
+  }
+
+  .dark .prose pre {
+    background: #0d1117;
+    border-color: #30363d;
+  }
+
+  .prose pre code {
+    @apply block p-5 text-sm leading-relaxed;
+    background: transparent;
+    font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
+  }
+
+  /* rehype-pretty-code syntax highlighting */
+  .prose pre [data-line] {
+    @apply px-5 border-l-2 border-transparent;
+  }
+
+  .prose pre [data-highlighted-line] {
+    @apply bg-blue-50/50 border-l-blue-400 dark:bg-blue-900/20 dark:border-l-blue-500;
+  }
+
+  .prose pre [data-line-numbers] [data-line]::before {
+    content: attr(data-line-num);
+    @apply inline-block w-8 mr-4 text-right text-gray-400 dark:text-gray-600 text-xs;
+  }
+
+  /* Line numbers gutter */
+  .prose pre [data-line-numbers-max-digits="2"] [data-line]::before {
+    width: 2rem;
+  }
+
+  /* Code title / filename */
+  .prose pre [data-rehype-pretty-code-title] {
+    @apply px-5 py-2 text-xs font-mono text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 rounded-t-xl;
+  }
+
+  .prose pre [data-rehype-pretty-code-title] + code {
+    @apply rounded-t-none;
+  }
+
+  /* Inline code fallback (when not inside pre) */
+  .prose :not(pre) > code {
+    @apply px-1.5 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-[0.9em] font-mono font-medium;
+  }
+
+  /* Horizontal rule */
+  .prose hr {
+    @apply my-10 border-0 h-px bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-600 to-transparent;
+  }
+
+  /* Tables */
+  .prose table {
+    @apply w-full my-6 text-sm border-collapse overflow-hidden rounded-lg;
+  }
+
+  .prose thead {
+    @apply bg-gray-100 dark:bg-gray-800;
+  }
+
+  .prose th {
+    @apply px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-300 border-b-2 border-gray-200 dark:border-gray-700;
+  }
+
+  .prose td {
+    @apply px-4 py-3 border-b border-gray-100 dark:border-gray-800;
+  }
+
+  .prose tbody tr:hover {
+    @apply bg-gray-50 dark:bg-gray-800/50;
+  }
+
+  /* Images */
+  .prose img {
+    @apply rounded-xl max-w-full my-6 shadow-lg;
+  }
+
+  /* Figure captions */
+  .prose figcaption {
+    @apply text-center text-sm text-gray-500 dark:text-gray-400 mt-2;
+  }
+}
+
+/* ========== Reading Progress Bar ========== */
+.reading-progress-bar {
+  @apply fixed top-0 left-0 h-1 z-50 transition-all duration-150;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}
+
+/* ========== Scrollbar Styling ========== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 dark:bg-gray-600 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-400 dark:bg-gray-500;
+}
