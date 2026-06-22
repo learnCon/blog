@@ -26,6 +26,22 @@ export default function Giscus({ slug }: CommentsProps) {
     ref.current.appendChild(script);
   }, [slug]);
 
+  // 处理 URL hash 定位（如 /blog/xxx#comments）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash.slice(1);
+    if (hash === "comments") {
+      // 等待 Utterances iframe 加载后再滚动
+      const timer = setTimeout(() => {
+        const el = document.getElementById("comments");
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
   return (
     <section className="mt-12 pt-8 border-t border-gray-200 dark:border-gray-800">
       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">
