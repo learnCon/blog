@@ -2,34 +2,26 @@
 
 import { useEffect, useRef } from "react";
 
-interface GiscusProps {
+interface CommentsProps {
   slug: string;
 }
 
-export default function Giscus({ slug }: GiscusProps) {
+export default function Giscus({ slug }: CommentsProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!ref.current || ref.current.hasChildNodes()) return;
 
     const script = document.createElement("script");
-    script.src = "https://giscus.app/client.js";
+    script.src = "https://utteranc.es/client.js";
     script.async = true;
     script.crossOrigin = "anonymous";
 
-    script.setAttribute("data-repo", "learnCon/blog");
-    script.setAttribute("data-repo-id", process.env.NEXT_PUBLIC_GISCUS_REPO_ID || "");
-    script.setAttribute("data-category", "Comments");
-    script.setAttribute("data-category-id", process.env.NEXT_PUBLIC_GISCUS_CATEGORY_ID || "");
-    script.setAttribute("data-mapping", "specific");
-    script.setAttribute("data-term", slug);
-    script.setAttribute("data-strict", "0");
-    script.setAttribute("data-reactions-enabled", "1");
-    script.setAttribute("data-emit-metadata", "0");
-    script.setAttribute("data-input-position", "top");
-    script.setAttribute("data-theme", "light");
-    script.setAttribute("data-lang", "zh-CN");
-    script.setAttribute("data-loading", "lazy");
+    // Utterances 配置：基于 GitHub Issues，无需任何 ID
+    script.setAttribute("repo", "learnCon/blog");
+    script.setAttribute("issue-term", "pathname");
+    script.setAttribute("label", "💬 评论");
+    script.setAttribute("theme", "github-light");
 
     ref.current.appendChild(script);
   }, [slug]);
@@ -39,6 +31,18 @@ export default function Giscus({ slug }: GiscusProps) {
       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">
         评论
       </h2>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        评论需要登录 GitHub 账号。评论内容将存储在{" "}
+        <a
+          href="https://github.com/learnCon/blog/issues"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-500 hover:underline"
+        >
+          GitHub Issues
+        </a>{" "}
+        中。
+      </p>
       <div ref={ref} />
     </section>
   );
