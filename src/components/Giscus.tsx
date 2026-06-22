@@ -8,32 +8,53 @@ interface CommentsProps {
 
 export default function Giscus({ slug }: CommentsProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (!ref.current || ref.current.hasChildNodes()) return;
 
-    setStatus("loading");
+    setLoading(true);
+    setError("");
 
+    // 动态加载 Waline CSS
+    if (!document.querySelector('link[href*="waline"]')) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "https://unpkg.com/@waline/client@v3/dist/waline.css";
+      document.head.appendChild(link);
+    }
+
+    // 动态加载 Waline JS
     const script = document.createElement("script");
-    script.src = "https://utteranc.es/client.js";
+    script.src = "https://unpkg.com/@waline/client@v3/dist/waline.js";
     script.async = true;
-    script.crossOrigin = "anonymous";
 
     script.onload = () => {
-      setStatus("loaded");
+      // @ts-ignore
+      if ((window as any).Waline) {
+        // @ts-ignore
+        (window as any).Waline({
+          el: ref.current,
+          serverURL: "https://waline-test-goer.vercel.app", // Waline 官方测试服务，可替换为自有后端
+          path: `/blog/${slug}`,
+          lang: "zh-CN",
+          locale: "zh-CN",
+          reaction: true,
+          meta: ["nick", "mail", "link"],
+          requiredMeta: ["nick", "mail"],
+          dark: "auto",
+        });
+        setLoading(false);
+      }
     };
 
     script.onerror = () => {
-      setStatus("error");
+      setError("评论脚本加载失败，请检查网络连接");
+      setLoading(false);
     };
 
-    script.setAttribute("repo", "learnCon/blog");
-    script.setAttribute("issue-term", "pathname");
-    script.setAttribute("label", "💬 评论");
-    script.setAttribute("theme", "github-light");
-
-    ref.current.appendChild(script);
+    document.body.appendChild(script);
   }, [slug]);
 
   // 处理 URL hash 定位
@@ -53,45 +74,23 @@ export default function Giscus({ slug }: CommentsProps) {
 
   return (
     <section className="mt-12 pt-8 border-t border-gray-200 dark:border-gray-800">
-      <h2 id="comments" className="text-lg font-semibold text-gray-900 dark:text-white mb-6 scroll-mt-24">
+      <h2
+        id="comments"
+        className="text-lg font-semibold text-gray-900 dark:text-white mb-6 scroll-mt-24"
+      >
         评论
       </h2>
 
-      {status === "loading" && (
+      {loading && (
         <p className="text-sm text-gray-400 dark:text-gray-500">
           评论区加载中...
         </p>
       )}
 
-      {status === "error" && (
+      {error && (
         <div className="text-sm text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 p-4 rounded-lg">
           <p className="font-medium mb-2">评论区加载失败</p>
-          <p className="mb-2">
-            可能的原因：网络无法访问 GitHub。你可以：
-          </p>
-          <ol className="list-decimal pl-5 space-y-1">
-            <li>
-              开启代理后{" "}
-              <button
-                onClick={() => window.location.reload()}
-                className="text-blue-500 hover:underline"
-              >
-                刷新页面
-              </button>
-            </li>
-            <li>
-              直接访问{" "}
-              <a
-                href={`https://github.com/learnCon/blog/issues?q=${encodeURIComponent(`label:"💬 评论" ${slug}`)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-500 hover:underline"
-              >
-                GitHub Issues
-              </a>{" "}
-              查看评论
-            </li>
-          </ol>
+          <p>{error}</p>
         </div>
       )}
 
