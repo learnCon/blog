@@ -1,6 +1,42 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { getAllPosts } from "@/lib/posts";
 import PostCard from "@/components/PostCard";
+
+const baseUrl = "https://blog.liangzaide.cn";
+
+export const metadata: Metadata = {
+  title: "技术博客 - 分享技术 · 记录成长",
+  description:
+    "记录编程心得、技术实践与代码分享。用文字沉淀思考，用代码表达想法。涵盖前端、后端、架构设计等技术话题。",
+  keywords: [
+    "技术博客",
+    "编程博客",
+    "前端开发",
+    "Next.js",
+    "React",
+    "MDX",
+    "TypeScript",
+    "架构设计",
+    "代码分享",
+  ],
+  alternates: { canonical: baseUrl },
+  openGraph: {
+    type: "website",
+    locale: "zh_CN",
+    url: baseUrl,
+    siteName: "技术博客",
+    title: "技术博客 - 分享技术 · 记录成长",
+    description:
+      "记录编程心得、技术实践与代码分享。用文字沉淀思考，用代码表达想法。",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "技术博客 - 分享技术 · 记录成长",
+    description:
+      "记录编程心得、技术实践与代码分享。用文字沉淀思考，用代码表达想法。",
+  },
+};
 
 export default function Home() {
   const posts = getAllPosts();

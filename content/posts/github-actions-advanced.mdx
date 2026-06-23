@@ -1,0 +1,472 @@
+---
+title: "GitHub Actions 高级技巧：从入门到自动化大师"
+description: "深入掌握 Composite Actions、动态矩阵、可复用工作流、条件编排与高级缓存策略，让你的 CI/CD 流水线更高效、更易维护。"
+date: "2026-06-22"
+tags: ["GitHub Actions", "CI/CD", "DevOps", "自动化"]
+author: "技术博主"
+---
+
+## 为什么需要"高级"用法
+
+GitHub Actions 的入门很简单——写个 `.yml` 文件，跑个测试，推送 Docker 镜像。但当你维护多个仓库、遇到耗时 40 分钟的构建、或者需要在数十个项目间共享相同的 CI 逻辑时，基础用法就捉襟见肘了。
+
+这篇文章假设你已经会写基本的 Workflow，聚焦于六个能让你的 CI/CD 工程化水平上一个台阶的技巧。
+
+---
+
+## 技巧一：Composite Actions —— 把重复逻辑封装成积木
+
+当多个项目都执行"安装 pnpm + 缓存 + setup Node.js"这个组合拳时，复制粘贴 YAML 迟早会反噬。Composite Action 让你像写函数一样封装步骤。
+
+```yaml
+# .github/actions/setup-node-pnpm/action.yml
+name: "Setup Node.js & pnpm"
+description: "Install pnpm, setup Node.js with smart caching"
+inputs:
+  node-version:
+    description: "Node.js version"
+    required: false
+    default: "22"
+  cache-key-prefix:
+    description: "Prefix for cache key"
+    required: false
+    default: "deps"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: "pnpm"
+
+    - name: Restore node_modules from cache
+      id: deps-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          **/node_modules
+          ~/.local/share/pnpm/store
+        key: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ inputs.cache-key-prefix }}-
+
+    - name: Install dependencies
+      if: steps.deps-cache.outputs.cache-hit != 'true'
+      run: pnpm install --frozen-lockfile
+      shell: bash
+```
+
+然后在任意 Workflow 中一行引用：
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node-pnpm
+        with:
+          node-version: "22"
+```
+
+**关键细节**：
+- Composite Action 中每个 `run` 必须显式指定 `shell`，否则 GitHub 会报错
+- 可以通过 `outputs` 向外部暴露值，例如缓存命中状态
+- 放在 `.github/actions/` 下只在当前仓库可用；发布到 GitHub Marketplace 则需要独立仓库
+
+---
+
+## 技巧二：动态矩阵 —— 让构建维度由数据驱动
+
+静态矩阵写死版本号很无聊。真正的自动化应该从配置文件读取矩阵：
+
+```yaml
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set-matrix
+        run: |
+          echo "matrix=$(jq -c . ./ci/matrix.json)" >> $GITHUB_OUTPUT
+```
+
+```json
+// ci/matrix.json
+{
+  "node": ["18", "20", "22"],
+  "os": ["ubuntu-latest", "windows-latest"],
+  "include": [
+    { "node": "22", "os": "macos-latest", "experimental": true }
+  ]
+}
+```
+
+```yaml
+  test:
+    needs: generate-matrix
+    strategy:
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      # ...
+```
+
+**进阶用法：基于变更路径动态决定跑哪些 Job**
+
+```yaml
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            backend:
+              - 'packages/server/**'
+              - 'go.mod'
+            frontend:
+              - 'packages/web/**'
+              - 'pnpm-lock.yaml'
+
+  test-backend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    # 只有后端代码变更才运行
+```
+
+---
+
+## 技巧三：Reusable Workflows —— 跨仓库共享完整流程
+
+Composite Actions 适合共享**步骤**，Reusable Workflows 适合共享**整个 Job 或 Pipeline**。它支持 `jobs.<job_id>.uses` 引用另一个仓库的工作流文件。
+
+定义一个可复用工作流：
+
+```yaml
+# .github/workflows/_deploy.yml
+name: Reusable Deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      ref:
+        required: false
+        type: string
+        default: "main"
+    secrets:
+      DEPLOY_TOKEN:
+        required: true
+    outputs:
+      deploy-url:
+        description: "The deployed URL"
+        value: ${{ jobs.deploy.outputs.url }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - id: deploy
+        run: |
+          echo "url=https://${{ inputs.environment }}.example.com" >> $GITHUB_OUTPUT
+```
+
+在任意仓库中引用：
+
+```yaml
+# .github/workflows/deploy-staging.yml
+jobs:
+  call-deploy:
+    uses: your-org/shared-workflows/.github/workflows/_deploy.yml@main
+    with:
+      environment: staging
+    secrets:
+      DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+```
+
+**和 Composite Actions 的选择指南**：
+
+| 场景 | 用哪个 |
+|---|---|
+| 共享 3-5 个 setup 步骤 | Composite Action |
+| 共享一个完整 Job（含 runner 选择、env 配置） | Reusable Workflow |
+| 需要 secrets 传递 | Reusable Workflow |
+| 需要在不同 runner 上运行 | Reusable Workflow |
+| 只是代码内的快捷方式 | Composite Action |
+
+---
+
+## 技巧四：高级缓存策略 —— 比你想象的多得多
+
+除了 `actions/cache@v4` 的常规用法，还有几个进阶姿势：
+
+### 缓存未命中时的 fallback 策略
+
+```yaml
+- name: Cache Turbo build
+  uses: actions/cache@v4
+  id: turbo-cache
+  with:
+    path: .turbo
+    key: turbo-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+    restore-keys: |
+      turbo-${{ runner.os }}-${{ github.ref_name }}-
+      turbo-${{ runner.os }}-main-
+      turbo-${{ runner.os }}-
+```
+
+`restore-keys` 按优先级回退：先用同一分支的缓存，不行就用 main 分支的，再不行用同 OS 的任意缓存。
+
+### 跨 Job 共享缓存
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache@v4
+        with:
+          path: ./dist
+          key: build-${{ github.sha }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache@v4
+        with:
+          path: ./dist
+          key: build-${{ github.sha }}
+          # 不设置 restore-keys，如果没有精确命中就报错
+      - run: npx wrangler pages deploy ./dist
+```
+
+### Download Artifact 替代跨 Job 大数据传输
+
+缓存有 10GB 限制且不是为跨 Job 设计的。大于 500MB 的产物用 Artifact：
+
+```yaml
+- uses: actions/upload-artifact@v4
+  with:
+    name: production-build
+    path: dist/
+    retention-days: 1  # 产物只需保留 1 天
+```
+
+---
+
+## 技巧五：条件执行与依赖编排
+
+### 仅在特定分支的 push 和 PR 时运行
+
+```yaml
+on:
+  push:
+    branches: [main, "release/*"]
+  pull_request:
+    branches: [main]
+```
+
+### 在 Job 级别跳过不必要的运行
+
+```yaml
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    # 跳过自动生成的 PR（如 Renovate/Dependabot 的）
+    if: github.actor != 'renovate[bot]' && github.actor != 'dependabot[bot]'
+    steps:
+      - run: pnpm lint
+
+  expensive-e2e:
+    runs-on: ubuntu-latest
+    # 只在 PR 且非 draft 时运行 e2e
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    needs: lint
+    steps:
+      # ...
+```
+
+### 条件 needs —— 跳过失败但非关键的依赖
+
+```yaml
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true  # 失败了也不阻塞下游
+    steps:
+      - run: pnpm typecheck
+
+  deploy-preview:
+    # typecheck 完成了就跑（不论成功或失败），lint 必须成功
+    needs: [lint, typecheck]
+    if: |
+      always() &&
+      needs.lint.result == 'success' &&
+      !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    steps:
+      # ...
+```
+
+`always()` 和 `needs.*.result` 的组合是编排复杂依赖关系的利器。
+
+---
+
+## 技巧六：自定义 Action 的输入校验与错误处理
+
+Composite Action 拿不到外部输入时可能静默失败。用 bash 做校验：
+
+```yaml
+runs:
+  using: "composite"
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.target-url }}" ]; then
+          echo "::error::target-url is required but was empty"
+          exit 1
+        fi
+        if [ "${{ inputs.retry-count }}" -lt 0 ] 2>/dev/null; then
+          echo "::error::retry-count must be >= 0"
+          exit 1
+        fi
+
+    - name: Main logic
+      shell: bash
+      run: |
+        set -euo pipefail
+        for i in $(seq 1 ${{ inputs.retry-count }}); do
+          if curl -sSf "${{ inputs.target-url }}"; then
+            exit 0
+          fi
+          echo "::warning::Attempt $i failed, retrying in 5s..."
+          sleep 5
+        done
+        echo "::error::All retries exhausted"
+        exit 1
+```
+
+**Workflow 注解语法速查**：
+
+| 语法 | 效果 |
+|---|---|
+| `::notice::消息` | 普通通知 |
+| `::warning::消息` | 警告（黄底） |
+| `::error::消息` | 错误（红底） |
+| `::group::标题` / `::endgroup::` | 折叠日志组 |
+| `::notice file=main.ts,line=5::类型不匹配` | 关联到文件的行级注解 |
+
+---
+
+## 实战：一个生产级 CI Pipeline
+
+把以上技巧组合起来，一个典型的 Monorepo 项目 CI 长这样：
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.detect.outputs.changes }}
+      has-any: ${{ steps.detect.outputs.any_changed == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: detect
+        uses: dorny/paths-filter@v3
+        with:
+          filters: .github/filter.yml
+          list-files: shell
+
+  lint:
+    needs: detect
+    if: needs.detect.outputs.has-any == 'true' || github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/_lint.yml
+
+  test:
+    needs: [detect, lint]
+    if: needs.detect.outputs.has-any == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    uses: ./.github/workflows/_test.yml
+    with:
+      shard: ${{ matrix.shard }}
+      total-shards: 3
+
+  report:
+    needs: test
+    if: always() && needs.test.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        with:
+          name: "Test Results"
+          path: "reports/test-*.xml"
+          reporter: jest-junit
+
+  deploy-preview:
+    needs: test
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_deploy-preview.yml
+    secrets: inherit
+```
+
+**要点解析**：
+- `concurrency` 自动取消同一个 PR 的旧运行，节省 Runner 时间
+- `detect` Job 通过 `paths-filter` 决定哪些包需要跑
+- 测试分片 `matrix shard: [1, 2, 3]` 并行加速
+- `always()` 确保即使测试失败，报告也能生成
+- `secrets: inherit` 避免逐一手动传递 secrets
+
+---
+
+## 总结
+
+GitHub Actions 从"能用"到"用得好"的关键跃迁在于：
+
+1. **封装**：Composite Actions 和 Reusable Workflows 消灭拷贝粘贴
+2. **动态化**：矩阵从数据驱动，只跑需要跑的
+3. **缓存策略**：多级 fallback + 跨 Job 共享
+4. **编排**：`always()` + `needs` 构建灵活依赖图
+5. **可观测性**：用 Workflow 注解让日志不再靠肉眼翻
+
+掌握这些技巧后，你的 CI 就不再是"能跑就行"，而是一个可靠、高效、可维护的自动化平台。

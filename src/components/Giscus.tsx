@@ -12,37 +12,34 @@ export default function Giscus({ slug }: CommentsProps) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!ref.current || ref.current.hasChildNodes()) return;
+    if (!ref.current || ref.current.hasChildNodes()) {
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     setError("");
 
-    // 使用本地 CSS（不经过境外 CDN）
-    if (!document.querySelector('link[href*="waline"]')) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = "/waline/waline.css";
-      document.head.appendChild(link);
+    // 注入 Waline CSS（public/waline.css）
+    if (!document.querySelector('link[href*="waline.css"]')) {
+      const cssLink = document.createElement("link");
+      cssLink.rel = "stylesheet";
+      cssLink.href = "/waline.css";
+      document.head.appendChild(cssLink);
     }
 
-    // 使用本地 JS
-    const script = document.createElement("script");
-    script.src = "/waline/waline.js";
-    script.async = true;
+    // 动态 import @waline/client/full
+    // 包导出为命名导出，init 是初始化函数
+    import("@waline/client/full")
+      .then((mod: any) => {
+        if (!ref.current) return;
 
-    script.onload = () => {
-      // @ts-ignore
-      if ((window as any).Waline) {
         try {
-          // @ts-ignore
-          (window as any).Waline({
-            el: ref.current,
-            // 使用 Waline 官方体验后端（国内可访问 vercel.app）
-            // 如需自有后端，请参考：https://waline.js.org/guide/get-started.html
-            serverURL: "https://waline-test-goer.vercel.app",
+          mod.init({
+            el: ref.current!,
+            serverURL: "https://cloud1-4gupto6316a428c8-1422718709.ap-shanghai.app.tcloudbase.com/waline",
             path: `/blog/${slug}`,
             lang: "zh-CN",
-            locale: "zh-CN",
             reaction: true,
             meta: ["nick", "mail", "link"],
             requiredMeta: ["nick", "mail"],
@@ -55,20 +52,11 @@ export default function Giscus({ slug }: CommentsProps) {
           setError("评论初始化失败：" + e.message);
           setLoading(false);
         }
-      }
-    };
-
-    script.onerror = () => {
-      setError("评论脚本加载失败，请检查网络连接");
-      setLoading(false);
-    };
-
-    document.body.appendChild(script);
-
-    return () => {
-      // 清理：防止组件卸载后脚本还在
-      try { document.body.removeChild(script); } catch {}
-    };
+      })
+      .catch((e: any) => {
+        setError("评论模块加载失败，请检查网络连接");
+        setLoading(false);
+      });
   }, [slug]);
 
   // 处理 URL hash 定位（如 /blog/xxx#comments）
@@ -109,9 +97,6 @@ export default function Giscus({ slug }: CommentsProps) {
         <div className="text-sm text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 p-4 rounded-lg">
           <p className="font-medium mb-2">评论区暂时无法加载</p>
           <p>{error}</p>
-          <p className="mt-2 text-xs text-gray-400">
-            提示：如因网络问题无法加载评论，请尝试开启代理后刷新页面。
-          </p>
         </div>
       )}
 

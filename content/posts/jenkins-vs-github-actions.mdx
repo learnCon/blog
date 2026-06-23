@@ -1,0 +1,296 @@
+---
+title: "Jenkins vs GitHub Actions：2026 年 CI/CD 工具选型指南"
+description: "从架构模型、配置方式、插件生态、成本与安全五个维度深度对比 Jenkins 和 GitHub Actions，帮你做出适合团队的决策。"
+date: "2026-06-22"
+tags: ["CI/CD", "Jenkins", "GitHub Actions", "DevOps", "工具对比"]
+author: "技术博主"
+---
+
+## 一句话结论
+
+**如果你的代码托管在 GitHub 且不需要跨平台多云部署**，GitHub Actions 是更优选择——零运维、配置即代码、与 PR 深度集成。**如果你有复杂的自托管需求、需要精细控制构建环境、或代码不在 GitHub 上**，Jenkins 依然是不可替代的瑞士军刀。
+
+---
+
+## 一、架构模型：胖服务器 vs 分布式云
+
+```
+Jenkins 架构：
+┌──────────────────────────────────────────┐
+│              Jenkins Master               │
+│  (Web UI, 调度, 插件管理, Job 配置)       │
+└──────┬──────────┬──────────┬─────────────┘
+       │          │          │
+   ┌───┴───┐  ┌───┴───┐  ┌───┴───┐
+   │ Agent │  │ Agent │  │ Agent │
+   │ Linux │  │ macOS │  │  Win  │
+   └───────┘  └───────┘  └───────┘
+
+GitHub Actions 架构：
+┌──────────────────────────────────────────┐
+│            GitHub.com (托管)              │
+│  .github/workflows/*.yml  →  调度引擎     │
+└──────┬──────────┬──────────┬─────────────┘
+       │          │          │
+   ┌───┴───┐  ┌───┴───┐  ┌───┴───┐
+   │ubuntu │  │macOS  │  │Win    │  (GitHub 托管)
+   │latest │  │latest │  │latest │
+   └───────┘  └───────┘  └───────┘
+```
+
+| 维度 | Jenkins | GitHub Actions |
+|---|---|---|
+| 部署方式 | 自建 Master + Agent | 完全托管（可选 Self-hosted Runner） |
+| 扩容 | 手动加 Agent 节点 | 自动弹性扩容 |
+| 高可用 | 需自建 Master HA（CloudBees 方案） | GitHub 保证 SLA |
+| 维护成本 | 升级 Master、插件、Agent、OS 安全补丁 | **零维护** |
+| 隔离性 | 可完全控制网络、硬件、依赖版本 | GitHib 托管环境限制较多 |
+
+---
+
+## 二、配置方式：Groovy DSL vs YAML
+
+**Jenkins —— 两种配置风格并存，碎片化严重**：
+
+Pipeline as Code（推荐方式）：
+
+```groovy
+// Jenkinsfile
+pipeline {
+    agent { label 'linux && docker' }
+    
+    environment {
+        NODE_VERSION = '22'
+    }
+    
+    stages {
+        stage('Install') {
+            steps {
+                sh 'npm ci'
+            }
+        }
+        stage('Test') {
+            parallel {
+                stage('Unit') { steps { sh 'npm run test:unit' } }
+                stage('E2E')  { steps { sh 'npm run test:e2e' } }
+            }
+        }
+    }
+    
+    post {
+        failure {
+            slackSend channel: '#ci-alerts', color: 'danger',
+                      message: "Build failed: ${env.BUILD_URL}"
+        }
+    }
+}
+```
+
+**GitHub Actions —— 纯 YAML，声明式**：
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [unit, e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+      - run: npm ci
+      - run: npm run test:${{ matrix.suite }}
+
+  notify:
+    needs: test
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK }}
+```
+
+**选型关键差异**：
+
+| 场景 | Jenkins | GitHub Actions |
+|---|---|---|
+| 可编程性 | Groovy 是真正的编程语言，可以写循环、条件、函数 | YAML + 表达式，复杂逻辑需拆分为 Action 或脚本 |
+| 学习曲线 | Groovy 语法 + Jenkins 特有 DSL，门槛高 | YAML 上手快，GitHub 用户基本零成本 |
+| 本地调试 | `jenkinsfile-runner` 或 Jenkins 本地实例 | `act` 工具可在本地模拟运行 |
+| 版本控制 | Jenkinsfile 和 Job 定义可能分离 | 所有配置天然与代码在同一仓库 |
+| UI 创建 | 可通过 Web UI 手动创建，不与代码同步 | 仅通过 `.github/workflows/` 下的 YAML 文件 |
+
+---
+
+## 三、插件生态：三万插件 vs 市场 + 复用 Workflow
+
+**Jenkins —— 庞大但负重前行**：
+
+- 1,800+ 官方社区插件，覆盖几乎所有工具
+- 经典痛点：插件间版本冲突、安全漏洞频发、升级 Jenkins 时插件兼容性噩梦
+- 插件用 Java 开发，门槛高
+
+**GitHub Actions —— 轻量但生长迅猛**：
+
+- 20,000+ Actions 在 GitHub Marketplace
+- 天然无冲突：每个 Action 跑在隔离容器中
+- 开发成本低：Composite Action（YAML）、JavaScript Action（Node.js）、Docker Action 三种方式
+
+```yaml
+# 在 Jenkins 中你可能需要以下插件：
+# - Git Plugin
+# - NodeJS Plugin  
+# - Docker Pipeline Plugin
+# - Slack Notification Plugin
+# - Blue Ocean (UI)
+# - Credentials Binding Plugin
+
+# GitHub Actions 开箱即用：
+# - actions/checkout (Git)
+# - actions/setup-node (Node.js)
+# - docker/build-push-action (Docker)
+# - slackapi/slack-github-action (通知)
+```
+
+---
+
+## 四、成本对比：隐性成本才是关键
+
+```
+┌─────────────────────────────────────────────────────┐
+│                成本构成对比                           │
+├──────────────┬──────────────────┬───────────────────┤
+│   成本项      │     Jenkins       │  GitHub Actions    │
+├──────────────┼──────────────────┼───────────────────┤
+│ 基础设施      │ 服务器 + 运维人力  │ GitHub 免费 2,000   │
+│              │                  │ 分钟/月 (公开仓库    │
+│              │                  │ 无限免费)           │
+├──────────────┼──────────────────┼───────────────────┤
+│ 人力成本      │ 至少 0.5 人维护   │ 0 运维人力          │
+├──────────────┼──────────────────┼───────────────────┤
+│ macOS 构建    │ 自购 Mac 硬件     │ 按量付费 (10x 费率) │
+│              │ (一次性 $3,000+)  │                    │
+├──────────────┼──────────────────┼───────────────────┤
+│ 存储          │ 服务器磁盘        │ 免费 500MB/仓库     │
+│              │ (一次性成本)       │ Artifact (超量按$0   │
+│              │                  │ /GB/月计费)         │
+├──────────────┼──────────────────┼───────────────────┤
+│ 隐性成本      │ 升级兼容性修复     │ Vendor lock-in      │
+│              │ 安全漏洞修补       │ 迁移成本            │
+│              │ 插件维护           │                    │
+└──────────────┴──────────────────┴───────────────────┘
+```
+
+**一个 20 人团队的年成本估算**：
+
+| 场景 | Jenkins（自建） | GitHub Actions |
+|---|---|---|
+| 纯 Linux 构建，公开仓库 | ¥15,000/年（服务器 + 运维时间） | ¥0 |
+| Linux 构建，私有仓库，轻度使用 | ¥15,000/年 | ¥0（2000 分钟内） |
+| 含 macOS 构建，私有仓库 | ¥20,000/年（硬件摊销） | ¥8,000-15,000/年 |
+| 重度使用（每天数百次构建） | ¥30,000-50,000/年 | ¥20,000-60,000/年 |
+
+**关键发现**：轻中度使用时 Actions 成本优势明显；重度使用 + 自有机房时 Jenkins 更划算。
+
+---
+
+## 五、安全与权限
+
+| 维度 | Jenkins | GitHub Actions |
+|---|---|---|
+| 凭证管理 | Credentials Binding 插件，存储在 Master 磁盘 | GitHub Secrets，加密存储在 GitHub 后端 |
+| 权限粒度 | 基于角色的 Project/Node 级权限 | 仓库级 + Environment 级保护规则 |
+| 审计 | 需插件（Audit Trail） | 自动记录在 GitHub 审计日志中 |
+| 密钥扫描 | 需外部工具 | GitHub 内置 secret scanning，推送前自动拦截 |
+| Fork PR 安全 | 无原生保护，需手动配置 | `pull_request_target` 可控制 fork PR 的 secrets 访问 |
+| 供应链安全 | 插件来源审核困难 | Dependabot 自动扫描 Actions 依赖漏洞 |
+
+**Jenkins 安全惨案**：2024 年 Jenkins 披露了 4 个高危 RCE（远程代码执行）漏洞，涉及 Git Server、CLI 等核心模块。自建 Jenkins 需要持续关注 CVE 公告并及时打补丁——这是很多团队忽视的隐性成本。
+
+**GitHub Actions 的安全优势**：
+
+```yaml
+# 用 Environment 保护生产部署
+environment:
+  name: production
+  # 可设置 required reviewers —— 必须有人审批才能部署
+  # 可设置 wait timer —— 部署前等待 N 分钟
+  # 可限制分支 —— 只有 main 分支能触发
+```
+
+---
+
+## 六、迁移策略：从 Jenkins 到 GitHub Actions
+
+如果你决定迁移，下面是实操路线图：
+
+```
+迁移四步法：
+阶段一（1-2周）               阶段二（2-4周）
+┌─────────────────┐          ┌─────────────────┐
+│ 并存运行         │   →      │ 逐 Pipeline 迁移 │
+│ Jenkins 不动     │          │ 从最简单开始     │
+│ Actions 搭起来   │          │ 保留 Jenkins 备份│
+└─────────────────┘          └─────────────────┘
+        ↓                            ↓
+阶段三（1-2周）               阶段四
+┌─────────────────┐          ┌─────────────────┐
+│ 灰度切换         │   →      │ 完全下线 Jenkins │
+│ 新 PR 用 Actions │          │ 归档 Jenkinsfile  │
+│ 关键分支留 Jenkins│         │ 清理服务器资源   │
+└─────────────────┘          └─────────────────┘
+```
+
+**Pipeline 一一对应映射**：
+
+| Jenkins 概念 | GitHub Actions 等价 |
+|---|---|
+| `Jenkinsfile` | `.github/workflows/*.yml` |
+| `pipeline {}` | `jobs:` |
+| `stage` | `job` |
+| `agent { label }` | `runs-on:` |
+| `steps {}` | `steps:` |
+| `post { failure {} }` | `if: failure()` 单独 job |
+| `parallel {}` | `strategy.matrix` 或并行 job |
+| `environment {}` | `env:` |
+| `credentials()` | `${{ secrets.XXX }}` |
+| `when { branch }` | `on.push.branches` |
+| `triggers { cron }` | `on.schedule` |
+
+**常见迁移坑**：
+
+1. **动态 Agent label → runs-on 固定值**：Jenkins 可以在 Groovy 中动态分配 agent，Actions 的 `runs-on` 是静态的，需要用 `strategy.matrix` 模拟
+2. **共享库 → Reusable Workflow**：Jenkins 的 `@Library` 注解对应 Actions 的 `workflow_call`
+3. **Credentials 不同作用域**：Jenkins 的凭证是全局或文件夹级，Actions 的 secrets 是仓库级或环境级
+4. **构建产物路径**：Jenkins 的 `archiveArtifacts` 对应 `actions/upload-artifact`，目标路径可能不同
+
+---
+
+## 最终建议
+
+| 你的情况 | 推荐 |
+|---|---|
+| 创业团队 / 个人项目，代码在 GitHub | **GitHub Actions**，零成本启动 |
+| 中型团队，主要在 GitHub，需 macOS 构建 | **GitHub Actions**，虽然 macOS 贵但运维成本为零 |
+| 企业级，代码在自建 GitLab/Gitea | **Jenkins**（或 GitLab CI，如果已用 GitLab） |
+| 需要访问内网资源、特殊硬件（GPU、FPGA） | **Jenkins + Self-hosted Runner 混合** |
+| 已有大量 Jenkins Pipeline，团队熟悉 Groovy | **暂不迁移**，新项目用 Actions，老项目逐步切换 |
+| 对构建环境有极端定制要求（内核模块、特殊网络拓扑） | **Jenkins**，完全的环境控制权 |
+
+没有银弹。选择与你的工程文化和基础设施现状相匹配的工具，比追逐"哪个更好"更重要。

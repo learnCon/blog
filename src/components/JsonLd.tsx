@@ -109,3 +109,50 @@ export function JsonLdBreadcrumb({ items }: JsonLdBreadcrumbProps) {
     />
   );
 }
+
+interface JsonLdBlogProps {
+  baseUrl: string;
+  name: string;
+  description: string;
+  posts: Array<{
+    title: string;
+    slug: string;
+    description: string;
+    date: string;
+    author: string;
+  }>;
+}
+
+export function JsonLdBlog({
+  baseUrl,
+  name,
+  description,
+  posts,
+}: JsonLdBlogProps) {
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Blog",
+    name,
+    description,
+    url: `${baseUrl}/blog`,
+    inLanguage: "zh-CN",
+    blogPost: posts.map((post) => ({
+      "@type": "BlogPosting",
+      headline: post.title,
+      description: post.description,
+      url: `${baseUrl}/blog/${post.slug}`,
+      datePublished: post.date,
+      author: {
+        "@type": "Person",
+        name: post.author,
+      },
+    })),
+  };
+
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+    />
+  );
+}
